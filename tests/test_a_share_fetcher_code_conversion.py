@@ -72,6 +72,14 @@ class TestPytdxAShareCodeConversion(unittest.TestCase):
         self.assertEqual(fetcher._get_market_code("000001"), (0, "000001"))
         self.assertEqual(fetcher._get_market_code("300750"), (0, "300750"))
 
+    def test_get_market_code_for_prefixed_codes(self) -> None:
+        fetcher = PytdxFetcher(hosts=[])
+
+        self.assertEqual(fetcher._get_market_code("SH.600519"), (1, "600519"))
+        self.assertEqual(fetcher._get_market_code("sh.600519"), (1, "600519"))
+        self.assertEqual(fetcher._get_market_code("SZ.000001"), (0, "000001"))
+        self.assertEqual(fetcher._get_market_code("ss.600519"), (1, "600519"))
+
 
 if __name__ == "__main__":
     unittest.main()
