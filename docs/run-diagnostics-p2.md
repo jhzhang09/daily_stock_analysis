@@ -42,6 +42,7 @@ GET /api/v1/history/{record_id}/diagnostics
 ## 兼容性边界
 
 - 本轮不新增配置项，不改变数据源优先级，不改变 fallback 策略。
+- 本轮不改变任何 LLM/provider/Base URL/配置迁移语义，仅新增历史快照中的诊断字段与查询接口。
 - API 只追加可选字段和新增只读接口；旧客户端可忽略。
 - 旧报告没有 `context_snapshot.diagnostics` 时返回 `unknown`，不报错。
 - 通知诊断在当前任务上下文中记录；历史报告如果保存时尚无通知证据，会在摘要中显示通知结果未知。

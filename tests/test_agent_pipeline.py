@@ -1538,6 +1538,83 @@ class TestAnalyzeWithAgentStockName(unittest.TestCase):
             self.assertEqual(dp["chip_structure"]["concentration"], "0.00%")
             self.assertNotIn("chip_unavailable_reason", dp)
 
+    def test_analyze_with_agent_history_context_includes_diagnostic_snapshot(self):
+        """Agent 分析入库存档时应保留 diagnostics 快照，避免历史诊断返回 unknown。"""
+        with patch('src.core.pipeline.get_config') as mock_config, \
+             patch('src.core.pipeline.get_db'), \
+             patch('src.core.pipeline.DataFetcherManager'), \
+             patch('src.core.pipeline.GeminiAnalyzer'), \
+             patch('src.core.pipeline.NotificationService'), \
+             patch('src.core.pipeline.SearchService'), \
+             patch('src.core.pipeline.fill_price_position_if_needed'), \
+             patch('src.core.pipeline.stabilize_decision_with_structure'), \
+             patch('src.core.pipeline.current_diagnostic_snapshot') as mock_diagnostic_snapshot:
+
+            mock_cfg = MagicMock()
+            mock_cfg.max_workers = 2
+            mock_cfg.agent_mode = True
+            mock_cfg.agent_max_steps = 10
+            mock_cfg.agent_skills = []
+            mock_cfg.bocha_api_keys = []
+            mock_cfg.tavily_api_keys = []
+            mock_cfg.anspire_api_keys = []
+            mock_cfg.brave_api_keys = []
+            mock_cfg.serpapi_keys = []
+            mock_cfg.searxng_base_urls = []
+            mock_cfg.searxng_public_instances_enabled = False
+            mock_cfg.news_max_age_days = 7
+            mock_cfg.enable_realtime_quote = True
+            mock_cfg.enable_chip_distribution = True
+            mock_cfg.realtime_source_priority = []
+            mock_cfg.save_context_snapshot = True
+            mock_cfg.report_language = "zh"
+            mock_cfg.report_integrity_enabled = False
+            mock_config.return_value = mock_cfg
+
+            from src.core.pipeline import StockAnalysisPipeline
+            from src.enums import ReportType
+            pipeline = StockAnalysisPipeline(config=mock_cfg)
+            pipeline.search_service.is_available = False
+            pipeline._ensure_agent_history = MagicMock()
+            pipeline._agent_result_to_analysis_result = MagicMock(
+                return_value=SimpleNamespace(
+                    success=True,
+                    code="588200",
+                    name="科创芯片ETF",
+                    model_used="agent-model",
+                    sentiment_score=70,
+                    operation_advice="持有",
+                    trend_prediction="震荡",
+                    analysis_summary="测试摘要",
+                )
+            )
+
+            mock_executor = MagicMock()
+            mock_executor.run.return_value = SimpleNamespace(
+                success=True,
+                provider="agent-provider",
+                dashboard={"stock_name": "科创芯片ETF"},
+            )
+            with patch('src.agent.factory.build_agent_executor', return_value=mock_executor):
+                mock_diagnostic_snapshot.return_value = {"trace_id": "trace-1391", "query_id": "q-1391"}
+                pipeline.db.save_analysis_history = MagicMock(return_value=1)
+
+                result = pipeline._analyze_with_agent(
+                    code="588200",
+                    report_type=ReportType.SIMPLE,
+                    query_id="q-1391",
+                    stock_name="科创芯片ETF",
+                    realtime_quote=None,
+                    chip_data=None,
+                )
+
+            self.assertIsNotNone(result)
+            call_kwargs = pipeline.db.save_analysis_history.call_args.kwargs
+            history_context = call_kwargs["context_snapshot"]
+            self.assertIn("diagnostics", history_context)
+            self.assertEqual(history_context["diagnostics"]["trace_id"], "trace-1391")
+            self.assertEqual(history_context["stock_name"], "科创芯片ETF")
+
 
 # ============================================================
 # Agent construction chain (real objects, mocked LLM)
