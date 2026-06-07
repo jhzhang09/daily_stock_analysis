@@ -323,6 +323,11 @@ class DailyMarketContextService:
                 notifier=notifier,
                 analyzer=analyzer,
                 search_service=search_service,
+                query_id=(
+                    current_query_id.strip()
+                    if isinstance(current_query_id, str) and current_query_id.strip()
+                    else None
+                ),
                 send_notification=False,
                 merge_notification=False,
                 override_region=region,

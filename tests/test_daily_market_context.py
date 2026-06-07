@@ -304,6 +304,52 @@ def test_reuses_same_run_history_when_saved_under_different_wall_clock_date() ->
     run_review.assert_not_called()
 
 
+def test_get_context_passes_current_query_id_to_market_review_when_generating() -> None:
+    db = MagicMock()
+    db.get_analysis_history.return_value = []
+    service = DailyMarketContextService(
+        db_manager=db,
+        today_fn=lambda: date(2026, 6, 6),
+    )
+    result = MarketReviewRunResult(
+        report="高风险退潮，仓位上限20%，等待确认。",
+        market_review_payload={
+            "kind": "market_review",
+            "region": "cn",
+            "sections": [
+                {
+                    "key": "overview",
+                    "title": "概览",
+                    "markdown": "高风险退潮，仓位上限20%，等待确认。",
+                }
+            ],
+        },
+    )
+    lock_token = object()
+
+    with patch(
+        "src.services.daily_market_context.try_acquire_market_review_lock",
+        return_value=lock_token,
+    ) as acquire_lock, \
+         patch("src.services.daily_market_context.release_market_review_lock") as release_lock, \
+         patch("src.services.daily_market_context.run_market_review", return_value=result) as run_review:
+        context = service.get_context(
+            region="cn",
+            config=SimpleNamespace(report_language="zh"),
+            notifier=MagicMock(),
+            analyzer=MagicMock(),
+            search_service=MagicMock(),
+            current_query_id="query-1381",
+        )
+
+    assert context is not None
+    assert context.source == "market_review_runtime"
+    run_review.assert_called_once()
+    assert run_review.call_args.kwargs["query_id"] == "query-1381"
+    acquire_lock.assert_called_once()
+    release_lock.assert_called_once_with(lock_token)
+
+
 def test_does_not_reuse_history_for_different_query_when_query_match_required() -> None:
     db = MagicMock()
     db.get_analysis_history.return_value = [
