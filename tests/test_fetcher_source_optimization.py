@@ -331,6 +331,46 @@ class TestFetcherSourceOptimization(unittest.TestCase):
         finally:
             DataFetcherManager.reset_daily_source_health()
 
+    @patch("src.config.get_config")
+    def test_daily_source_health_does_not_preconsume_half_open_fallback(self, mock_get_config):
+        mock_get_config.return_value = SimpleNamespace()
+        DataFetcherManager.reset_daily_source_health()
+        try:
+            primary = MagicMock()
+            primary.name = "EfinanceFetcher"
+            primary.priority = 0
+            primary.get_daily_data.return_value = _make_daily_df()
+
+            backup = MagicMock()
+            backup.name = "TencentFetcher"
+            backup.priority = 1
+            backup.get_daily_data.return_value = _make_daily_df()
+
+            manager = DataFetcherManager(fetchers=[primary, backup])
+            health_key = DataFetcherManager._daily_health_key(backup, "cn")
+            breaker = DataFetcherManager._daily_source_health
+            for _ in range(breaker.failure_threshold):
+                breaker.record_failure(health_key, error="timeout")
+            with breaker._lock:
+                breaker._states[health_key]["last_failure_time"] -= breaker.cooldown_seconds + 1
+
+            df, source = manager.get_daily_data("000001", start_date="2026-05-01", end_date="2026-05-08")
+
+            self.assertFalse(df.empty)
+            self.assertEqual(source, "EfinanceFetcher")
+            backup.get_daily_data.assert_not_called()
+
+            primary.get_daily_data.reset_mock()
+            primary.get_daily_data.side_effect = RuntimeError("primary down")
+
+            df, source = manager.get_daily_data("000001", start_date="2026-05-01", end_date="2026-05-08")
+
+            self.assertFalse(df.empty)
+            self.assertEqual(source, "TencentFetcher")
+            backup.get_daily_data.assert_called_once()
+        finally:
+            DataFetcherManager.reset_daily_source_health()
+
 
 if __name__ == "__main__":
     unittest.main()

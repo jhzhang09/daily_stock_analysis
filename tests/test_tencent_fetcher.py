@@ -91,3 +91,19 @@ def test_tencent_fetcher_preserves_amount_column_when_missing() -> None:
 
     assert "amount" in df.columns
     assert pd.isna(df.iloc[0]["amount"])
+
+
+def test_tencent_fetcher_returns_empty_frame_for_empty_history() -> None:
+    payload = {"data": {"sz000001": {"qfqday": []}}}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return payload
+
+    with patch("data_provider.tencent_fetcher.requests.get", return_value=FakeResponse()):
+        df = TencentFetcher().get_daily_data("000001", start_date="2026-05-01", end_date="2026-05-10")
+
+    assert df.empty

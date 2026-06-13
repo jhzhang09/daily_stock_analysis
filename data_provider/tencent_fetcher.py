@@ -10,7 +10,7 @@ from typing import Any, Optional
 import pandas as pd
 import requests
 
-from .base import BaseFetcher, DataFetchError, normalize_stock_code, is_bse_code
+from .base import BaseFetcher, DataFetchError, STANDARD_COLUMNS, normalize_stock_code, is_bse_code
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,7 @@ class TencentFetcher(BaseFetcher):
 
     name = "TencentFetcher"
     priority = 0
+    allow_empty_daily_data = True
 
     _KLINE_ENDPOINT = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get"
     _HTTP_TIMEOUT_SECONDS = 8
@@ -41,14 +42,19 @@ class TencentFetcher(BaseFetcher):
         payload = response.json()
         rows = _extract_kline_rows(payload, symbol=symbol)
         if not rows:
-            raise DataFetchError(f"TencentFetcher empty daily history for {stock_code}")
+            logger.info("TencentFetcher empty daily history for %s", stock_code)
+            return _empty_daily_frame()
 
         df = pd.DataFrame(rows)
         df = df[(df["date"] >= start_date) & (df["date"] <= end_date)]
         if df.empty:
-            raise DataFetchError(
-                f"TencentFetcher daily history outside requested range for {stock_code}: {start_date}~{end_date}"
+            logger.info(
+                "TencentFetcher daily history outside requested range for %s: %s~%s",
+                stock_code,
+                start_date,
+                end_date,
             )
+            return _empty_daily_frame()
         return df
 
     def _normalize_data(self, df: pd.DataFrame, stock_code: str) -> pd.DataFrame:
@@ -82,6 +88,10 @@ def _estimate_lookback_days(*, start_date: str, end_date: str) -> int:
         calendar_days = 90
     # Trading days are sparse over calendar days; add margin for holidays/suspensions.
     return max(30, min(800, int(calendar_days * 1.8) + 20))
+
+
+def _empty_daily_frame() -> pd.DataFrame:
+    return pd.DataFrame(columns=STANDARD_COLUMNS)
 
 
 def _extract_kline_rows(payload: dict[str, Any], *, symbol: str) -> list[dict[str, Any]]:

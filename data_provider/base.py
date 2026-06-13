@@ -302,6 +302,7 @@ class BaseFetcher(ABC):
     
     name: str = "BaseFetcher"
     priority: int = 99  # 优先级数字越小越优先
+    allow_empty_daily_data: bool = False
     
     @abstractmethod
     def _fetch_raw_data(self, stock_code: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -448,7 +449,16 @@ class BaseFetcher(ABC):
             # Step 1: 获取原始数据
             raw_df = self._fetch_raw_data(stock_code, start_date, end_date)
             
-            if raw_df is None or raw_df.empty:
+            if raw_df is None:
+                raise DataFetchError(f"[{self.name}] 未获取到 {stock_code} 的数据")
+            if raw_df.empty:
+                if self.allow_empty_daily_data:
+                    elapsed = time.time() - request_start
+                    logger.info(
+                        f"[{self.name}] {stock_code} 返回空日线结果: 范围={start_date} ~ {end_date}, "
+                        f"elapsed={elapsed:.2f}s"
+                    )
+                    return raw_df.copy()
                 raise DataFetchError(f"[{self.name}] 未获取到 {stock_code} 的数据")
             
             # Step 2: 标准化列名
@@ -748,26 +758,24 @@ class DataFetcherManager:
         return f"daily_data:{market}:{fetcher.name}"
 
     @classmethod
-    def _filter_daily_fetchers_by_health(
+    def _is_daily_source_available(
         cls,
-        fetchers: List[BaseFetcher],
+        fetcher: BaseFetcher,
         market: str,
-    ) -> List[BaseFetcher]:
-        kept: List[BaseFetcher] = []
-        skipped: List[str] = []
-        for fetcher in fetchers:
-            key = cls._daily_health_key(fetcher, market)
-            if cls._daily_source_health.is_available(key):
-                kept.append(fetcher)
-            else:
-                skipped.append(fetcher.name)
-        if skipped:
-            logger.info(
-                "[数据源健康度] %s 日线跳过短期熔断的数据源: %s",
-                market,
-                ", ".join(skipped),
-            )
-        return kept
+    ) -> bool:
+        key = cls._daily_health_key(fetcher, market)
+        if cls._daily_source_health.is_available(key):
+            return True
+        logger.info(
+            "[数据源健康度] %s 日线跳过短期熔断的数据源: %s",
+            market,
+            fetcher.name,
+        )
+        return False
+
+    @staticmethod
+    def _daily_source_unavailable_error(fetcher: BaseFetcher) -> str:
+        return f"[{fetcher.name}] (CircuitOpen) 数据源短期熔断"
 
     @classmethod
     def _record_daily_source_success(cls, fetcher: BaseFetcher, market: str) -> None:
@@ -1214,7 +1222,6 @@ class DataFetcherManager:
         if is_hk:
             fetchers = self._filter_daily_fetchers_for_market(fetchers, "hk")
         fetchers = self._filter_fetchers_by_capability(fetchers, capability="daily_data")
-        fetchers = self._filter_daily_fetchers_by_health(fetchers, market)
         total_fetchers = len(fetchers)
 
         if total_fetchers == 0:
@@ -1246,6 +1253,9 @@ class DataFetcherManager:
                 for attempt, fetcher in enumerate(fetchers, start=1):
                     if fetcher.name != src_name:
                         continue
+                    if not self._is_daily_source_available(fetcher, market):
+                        errors.append(self._daily_source_unavailable_error(fetcher))
+                        break
                     attempt_start = time.time()
                     try:
                         role = "首选" if src_name == source_order[0] else "兜底"
@@ -1323,6 +1333,9 @@ class DataFetcherManager:
             raise DataFetchError(error_summary)
 
         for attempt, fetcher in enumerate(fetchers, start=1):
+            if not self._is_daily_source_available(fetcher, market):
+                errors.append(self._daily_source_unavailable_error(fetcher))
+                continue
             attempt_start = time.time()
             fallback_to = fetchers[attempt].name if attempt < total_fetchers else None
             try:
